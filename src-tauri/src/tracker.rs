@@ -25,21 +25,55 @@ struct OpenSeg {
 pub struct Tracker {
     db: Db,
     current: Option<OpenSeg>,
+    blocked: bool,
 }
 
 impl Tracker {
     pub fn new(db: Db) -> Result<Self> {
         db.recover()?;
-        Ok(Tracker { db, current: None })
+        Ok(Tracker {
+            db,
+            current: None,
+            blocked: false,
+        })
     }
 
     pub fn db(&self) -> &Db {
         &self.db
     }
 
+    /// Cierra el segmento abierto, si lo hay.
+    fn close_current(&mut self, now_ts: i64) -> Result<()> {
+        if let Some(current) = self.current.take() {
+            self.db.close_segment(current.segment_id, now_ts)?;
+        }
+        Ok(())
+    }
+
+    /// Bloqueo de sesión o suspensión (§5.3): cierra y pausa el conteo.
+    pub fn on_lock(&mut self, now_ts: i64) -> Result<()> {
+        self.blocked = true;
+        self.close_current(now_ts)
+    }
+
+    pub fn on_unlock(&mut self) {
+        self.blocked = false;
+    }
+
+    pub fn on_suspend(&mut self, now_ts: i64) -> Result<()> {
+        self.on_lock(now_ts)
+    }
+
+    pub fn on_resume(&mut self) {
+        self.on_unlock();
+    }
+
     pub fn tick(&mut self, obs: &Observation) -> Result<()> {
-        let Some(window) = &obs.window else {
+        if self.blocked {
             return Ok(());
+        }
+        let Some(window) = &obs.window else {
+            return self.close_current(obs.now_ts);
         };
 
         let threshold = self.db.config_i64("idle_threshold_sec")?;
@@ -226,5 +260,71 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM usage_daily", [], |r| r.get(0))
             .unwrap();
         assert_eq!(rows, 0);
+    }
+
+    #[test]
+    fn lock_closes_segment_and_blocks_until_unlock() {
+        let db = Db::open_in_memory().unwrap();
+        let mut t = Tracker::new(db).unwrap();
+
+        t.tick(&safari_obs(0, 1000)).unwrap();
+        t.on_lock(1050).unwrap();
+
+        let segs = segments(&t);
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].3, 1050, "cerrado al bloquear");
+
+        // Ticks durante el bloqueo no cuentan.
+        t.tick(&safari_obs(0, 1060)).unwrap();
+        assert_eq!(segments(&t).len(), 1);
+
+        // Al desbloquear, el siguiente tick abre nuevo; el hueco no se cuenta.
+        t.on_unlock();
+        t.tick(&safari_obs(0, 1100)).unwrap();
+        let segs = segments(&t);
+        assert_eq!(segs.len(), 2);
+        assert_eq!(segs[1].2, 1100);
+    }
+
+    #[test]
+    fn suspend_resume_behaves_like_lock() {
+        let db = Db::open_in_memory().unwrap();
+        let mut t = Tracker::new(db).unwrap();
+
+        t.tick(&safari_obs(0, 1000)).unwrap();
+        t.on_suspend(1030).unwrap();
+        t.tick(&safari_obs(0, 1040)).unwrap();
+        assert_eq!(segments(&t).len(), 1);
+        assert_eq!(segments(&t)[0].3, 1030);
+
+        t.on_resume();
+        t.tick(&safari_obs(0, 1200)).unwrap();
+        assert_eq!(segments(&t).len(), 2);
+        assert_eq!(segments(&t)[1].2, 1200);
+    }
+
+    #[test]
+    fn no_foreground_window_closes_current() {
+        let db = Db::open_in_memory().unwrap();
+        let mut t = Tracker::new(db).unwrap();
+
+        t.tick(&safari_obs(0, 1000)).unwrap();
+        t.tick(
+            &Observation {
+                window: None,
+                idle_seconds: 0,
+                now_ts: 1020,
+            },
+        )
+        .unwrap();
+
+        let segs = segments(&t);
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].3, 1020, "cerrado al perder foreground");
+        assert_eq!(
+            t.db().config_str("open_segment_id").unwrap(),
+            "",
+            "sin segmento abierto"
+        );
     }
 }
