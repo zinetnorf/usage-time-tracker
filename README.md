@@ -1,139 +1,107 @@
 # Usage Tracker
 
-Aplicación de escritorio que mide cuánto tiempo usas cada aplicación. Corre en segundo plano desde la bandeja del sistema, detecta la ventana en primer plano y distingue entre **tiempo activo** (con teclado/mouse) y **tiempo inactivo**. Multiplataforma: Windows 11 y macOS.
+Desktop application that measures how much time you spend in each application. It runs in the background from the system tray, detects the foreground window, and distinguishes between **active time** (keyboard/mouse input) and **idle time**. Cross-platform: Windows 11 and macOS.
 
-## 🔒 100% local, cero red
+## 🔒 100% local, zero network
 
-**El diferenciador de esta app: tus datos nunca salen de tu equipo.**
+**This app's differentiator: your data never leaves your device.**
 
-- Sin telemetría, sin cuentas, sin nube, sin llamadas de red de ningún tipo.
-- La base de datos (SQLite) vive en tu máquina y los reportes se generan y consultan solo ahí.
-- El código es abierto: puedes verificarlo.
+- No telemetry, no accounts, no cloud, no network calls of any kind.
+- The database (SQLite) lives on your machine, and reports are generated and viewed only there.
+- The code is open source: you can verify it.
 
-| Plataforma | Ubicación de los datos |
+| Platform | Data location |
 |---|---|
 | macOS | `~/Library/Application Support/com.davisg.usage-tracker/usage.db` |
 | Windows | `%APPDATA%\com.davisg.usage-tracker\usage.db` |
 
-## Características
+## Features
 
-- **Tracking automático** de la app en primer plano, con muestreo cada 1.5 s (configurable).
-- **Activo vs. inactivo:** tras N segundos sin input (60 por defecto) el tiempo cuenta como inactivo; tú decides si suma en los reportes.
-- **Pausa inteligente:** al bloquear la sesión o suspender el equipo el conteo se detiene; el hueco no se rellena.
-- **Dashboard** con 4 vistas:
-  - **Hoy:** total del día + gráfico por app + lista activo/inactivo.
-  - **Histórico:** tendencia de 7/14/30 días + desglose por app.
-  - **Apps:** renombrar, fusionar entradas (p. ej. `Code.exe` → "VS Code") y excluir apps del tracking (blacklist).
-  - **Ajustes:** umbral de inactividad, retención, autostart, idioma…
-- **Export a PDF:** la vista actual o un reporte completo (las apps excluidas no aparecen en los reportes).
-- **Bandeja del sistema:** resumen rápido del día, pausar/reanudar, abrir dashboard. Cerrar la ventana NO cierra la app.
-- **Resiliente:** si la app muere de golpe (crash, corte de luz), al reabrir recupera el conteo sin inflar ni perder datos.
-- **Idiomas:** español (default) e inglés.
-- **Retención:** el detalle crudo se purga a los 180 días (configurable); los agregados diarios se conservan.
+- **Automatic tracking** of the foreground app, sampling every 1.5 s (configurable).
+- **Active vs. idle:** after N seconds without input (60 by default) time counts as idle; you decide whether it adds up in reports.
+- **Smart pause:** when the session locks or the machine sleeps, counting stops; the gap is never backfilled.
+- **Dashboard** with 4 views:
+  - **Today:** daily total + per-app chart + active/idle list.
+  - **History:** 7/14/30-day trend + per-app breakdown.
+  - **Apps:** rename, merge entries (e.g. `Code.exe` → "VS Code"), and exclude apps from tracking (blacklist).
+  - **Settings:** idle threshold, retention, autostart, language…
+- **PDF export:** the current view or a full report (excluded apps never appear in reports).
+- **System tray:** quick daily summary, pause/resume, open dashboard. Closing the window does NOT quit the app.
+- **Resilient:** if the app dies abruptly (crash, power loss), on relaunch it recovers the count without inflating or losing data.
+- **Languages:** Spanish (default) and English.
+- **Retention:** raw detail is purged after 180 days (configurable); daily aggregates are kept forever.
 
-## Instalación
+## Installation
 
-Descarga el instalador desde [Releases](https://github.com/zinetnorf/usage-time-tracker/releases):
+Download the installer from [Releases](https://github.com/zinetnorf/usage-time-tracker/releases):
 
-| Plataforma | Archivo |
+| Platform | File |
 |---|---|
-| macOS (Intel y Apple Silicon) | `Usage Tracker_x.y.z_universal.dmg` |
-| Windows 11 | `Usage Tracker_x.y.z_x64-setup.exe` o `.msi` |
+| macOS (Intel and Apple Silicon) | `Usage Tracker_x.y.z_universal.dmg` |
+| Windows 11 | `Usage Tracker_x.y.z_x64-setup.exe` or `.msi` |
 
-### macOS: primer arranque
+### macOS: first launch
 
-Los instaladores no están firmados con certificado de Apple (todavía), así que Gatekeeper protestará:
+> **⚠️ Note: this app is NOT signed with an Apple certificate.** macOS will block it by default, and you must allow it manually — this is expected for unsigned open-source apps and only needs to be done once.
 
-1. Abre el `.dmg` y arrastra **Usage Tracker** a Aplicaciones.
-2. La primera vez: **clic derecho → Abrir** (en vez de doble clic).
-3. Si macOS dice que la app está "dañada", ejecuta en Terminal:
+1. Open the `.dmg` and drag **Usage Tracker** into Applications.
+2. First launch: **right-click → Open** (instead of double-clicking), then confirm.
+3. If macOS claims the app is "damaged", run in Terminal:
    ```bash
    xattr -cr "/Applications/Usage Tracker.app"
    ```
-4. **Permiso de Accesibilidad:** macOS lo exige para leer el título de la ventana activa. El onboarding de la app te guía para concederlo (Ajustes → Privacidad y seguridad → Accesibilidad) y hay que **relanzar la app** después. Sin el permiso la app funciona igual, solo que sin títulos de ventana.
+4. **Accessibility permission:** macOS requires it to read the active window title. The app's onboarding guides you to grant it (System Settings → Privacy & Security → Accessibility), and you must **relaunch the app** afterwards. Without the permission the app still works — just without window titles.
 
-### Windows: primer arranque
+### Windows: first launch
 
-SmartScreen mostrará "editor desconocido" (instalador sin firmar): **Más información → Ejecutar de todas formas**. No requiere permisos especiales.
+SmartScreen will show "unknown publisher" (unsigned installer): **More info → Run anyway**. No special permissions required.
 
-## Desarrollo
-
-### Prerrequisitos
-
-- [Rust](https://rustup.rs) (stable)
-- [Node.js](https://nodejs.org) 22+
-- [pnpm](https://pnpm.io) 11+
-- Linux no está soportado todavía (el tracking usa APIs de Windows/macOS).
-
-### Comandos
-
-```bash
-pnpm install        # dependencias del frontend
-pnpm tauri dev      # app en modo desarrollo (hot reload)
-
-# Tests
-cd src-tauri && cargo test    # núcleo Rust
-pnpm exec vitest run          # utilidades del frontend
-
-# Build de producción
-pnpm tauri build                                      # plataforma actual
-pnpm tauri build --target universal-apple-darwin      # macOS universal
-```
-
-Los instaladores quedan en `src-tauri/target/**/release/bundle/`.
-
-### Releases automáticas
-
-El workflow de GitHub Actions (`.github/workflows/release.yml`) compila macOS (universal) y Windows al pushear un tag:
-
-```bash
-git tag v0.1.0 && git push origin v0.1.0
-```
-
-Genera un **draft release** con los instaladores adjuntos; revísalo y publícalo desde GitHub.
-
-## Arquitectura
+## Architecture
 
 ```
 ┌──────────────────────────────────────────────┐
-│ Proceso Rust (siempre vivo)                  │
-│  Tracker loop (poll 1.5s) ──▶ SQLite (WAL)   │
-│  - ventana activa (x-win)        ▲           │
-│  - idle del sistema (user-idle)  │ invoke    │
-│  - máquina de estados            │           │
+│ Rust process (always alive)                  │
+│  Tracker loop (1.5s poll) ──▶ SQLite (WAL)   │
+│  - active window (x-win)         ▲           │
+│  - system idle (user-idle)       │ invoke    │
+│  - state machine                 │           │
 │  Tray + power/lock detection     │           │
 └──────────────────────────────────┼───────────┘
                                    │
-                  Webview React (solo al abrir)
-                  Hoy · Histórico · Apps · Ajustes
+                  React webview (only when opened)
+                  Today · History · Apps · Settings
 ```
 
-- **Core:** Tauri v2 + Rust. El motor de tracking corre aunque la ventana esté cerrada; el webview solo se carga al abrir el dashboard.
+- **Core:** Tauri v2 + Rust. The tracking engine runs even with the window closed; the webview only loads when the dashboard opens.
 - **UI:** React + TypeScript + Tailwind CSS + Recharts.
-- **Datos:** SQLite vía `rusqlite` (modo WAL). Segmentos crudos + rollup diario por app. Migraciones versionadas.
-- **Tracking:** cada cambio de app o de estado (activo/inactivo) cierra un segmento y abre otro; un segmento que cruza medianoche se parte por día. Flush periódico anti-crash del segmento en curso.
+- **Data:** SQLite via `rusqlite` (WAL mode). Raw segments + daily per-app rollup. Versioned migrations.
+- **Tracking:** every app or state change (active/idle) closes one segment and opens another; a segment crossing midnight is split per day. Periodic anti-crash flush of the in-progress segment.
 
-## Configuración
+## Configuration
 
-Todas las claves se editan desde la vista **Ajustes**:
+All keys are editable from the **Settings** view:
 
-| Clave | Default | Descripción |
+| Key | Default | Description |
 |---|---|---|
-| `idle_threshold_sec` | 60 | Segundos sin input para pasar a inactivo |
-| `count_idle_as_usage` | sí | Si el tiempo inactivo suma en reportes |
-| `track_window_titles` | sí | Guardar título de la ventana activa |
-| `poll_interval_ms` | 1500 | Cadencia del muestreo |
-| `raw_retention_days` | 180 | Días de detalle crudo antes de purgar |
-| `autostart_enabled` | sí | Iniciar al arrancar la sesión |
-| `language` | es | Idioma de la UI (`es` / `en`) |
+| `idle_threshold_sec` | 60 | Seconds without input before idle |
+| `count_idle_as_usage` | yes | Whether idle time adds up in reports |
+| `track_window_titles` | yes | Store the active window title |
+| `poll_interval_ms` | 1500 | Sampling cadence |
+| `raw_retention_days` | 180 | Days of raw detail before purging |
+| `autostart_enabled` | yes | Launch at login |
+| `language` | es | UI language (`es` / `en`) |
 
-> **Límite conocido:** sin input no es posible distinguir "usuario ausente" de "usuario leyendo/viendo contenido": ambos cuentan como inactivo. Por eso es configurable si el tiempo inactivo suma o no.
+> **Known limitation:** without input it is impossible to tell "user away" from "user reading/watching content": both count as idle. That is why whether idle time counts is configurable.
+
+## Development
+
+See [DEVELOPMENT.md](DEVELOPMENT.md) for prerequisites, commands, and the release process.
 
 ## Roadmap
 
 - [x] MVP: tracking + dashboard + tray + onboarding (macOS/Windows)
-- [x] Blacklist de apps y export a PDF
-- [ ] Desglose por título de ventana / sitio web
-- [ ] Categorías y metas (productivo vs. distracción)
-- [ ] Firma y notarización de instaladores + auto-update
+- [x] App blacklist and PDF export
+- [ ] Per-window-title / per-website breakdown
+- [ ] Categories and goals (productive vs. distraction)
+- [ ] Installer signing and notarization + auto-update
 - [ ] Linux
