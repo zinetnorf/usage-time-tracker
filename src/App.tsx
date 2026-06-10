@@ -1,51 +1,64 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
-import "./App.css";
+import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { api, type Settings } from "./lib/api";
+import { AppsView } from "./views/AppsView";
+import { HistoryView } from "./views/HistoryView";
+import { SettingsView } from "./views/SettingsView";
+import { TodayView } from "./views/TodayView";
 
-function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+const TABS = ["today", "history", "apps", "settings"] as const;
+type Tab = (typeof TABS)[number];
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
+export default function App() {
+  const { t, i18n } = useTranslation();
+  const [tab, setTab] = useState<Tab>("today");
+  const [settings, setSettings] = useState<Settings | null>(null);
+
+  useEffect(function loadSettings() {
+    api.settings().then((loaded) => {
+      setSettings(loaded);
+      i18n.changeLanguage(loaded.language ?? "es");
+    });
+  }, []);
+
+  const changeSetting = (key: string, value: string) => {
+    setSettings((curr) => (curr ? { ...curr, [key]: value } : curr));
+    api.setSetting(key, value);
+    if (key === "language") i18n.changeLanguage(value);
+  };
+
+  if (!settings) return null;
+
+  const countIdle = settings.count_idle_as_usage === "true";
+  const topCount = Number(settings.top_apps_count) || 10;
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
+    <main className="min-h-screen bg-zinc-950 text-zinc-100 px-6 py-5">
+      <nav className="flex gap-1 mb-6 border-b border-zinc-800">
+        {TABS.map((name) => (
+          <button
+            key={name}
+            onClick={() => setTab(name)}
+            className={`px-4 py-2 text-sm border-b-2 -mb-px ${
+              tab === name
+                ? "border-emerald-500 text-white"
+                : "border-transparent text-zinc-400 hover:text-zinc-200"
+            }`}
+          >
+            {t(`tabs.${name}`)}
+          </button>
+        ))}
+      </nav>
 
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
+      {tab === "today" ? (
+        <TodayView countIdle={countIdle} topCount={topCount} />
+      ) : tab === "history" ? (
+        <HistoryView countIdle={countIdle} />
+      ) : tab === "apps" ? (
+        <AppsView />
+      ) : (
+        <SettingsView settings={settings} onChange={changeSetting} />
+      )}
     </main>
   );
 }
-
-export default App;
