@@ -161,13 +161,16 @@ impl Db {
         state: SegState,
         start_ts: i64,
     ) -> Result<i64> {
-        self.conn.query_row(
+        let id: i64 = self.conn.query_row(
             "INSERT INTO segments (app_id, window_title, state, start_ts, end_ts, duration_sec, day)
              VALUES (?1, ?2, ?3, ?4, ?4, 0, ?5)
              RETURNING id",
             rusqlite::params![app_id, window_title, state.as_str(), start_ts, local_day(start_ts)],
             |r| r.get(0),
-        )
+        )?;
+        // Marker para recovery (§13): identifica el único segmento abierto.
+        self.set_config("open_segment_id", &id.to_string())?;
+        Ok(id)
     }
 
     /// Persiste avance del segmento abierto (anti-crash, §5.2.5).
@@ -195,6 +198,7 @@ impl Db {
             let boundary = next_local_midnight(start_ts);
             if end_ts <= boundary {
                 self.close_segment_piece(seg_id, end_ts)?;
+                self.set_config("open_segment_id", "")?;
                 return Ok(());
             }
 
@@ -224,6 +228,23 @@ impl Db {
             [segment_id],
         )?;
         Ok(())
+    }
+
+    /// Recovery de arranque (§13): si quedó un segmento abierto de una
+    /// sesión previa, lo cierra en su último `end_ts` flusheado. No
+    /// rellena el hueco hasta ahora.
+    pub fn recover(&self) -> Result<Option<i64>> {
+        let marker = self.config_str("open_segment_id")?;
+        let Ok(seg_id) = marker.parse::<i64>() else {
+            return Ok(None);
+        };
+        let end_ts: i64 = self.conn.query_row(
+            "SELECT end_ts FROM segments WHERE id = ?1",
+            [seg_id],
+            |r| r.get(0),
+        )?;
+        self.close_segment(seg_id, end_ts)?;
+        Ok(Some(seg_id))
     }
 
     /// Defaults del spec §7. Clave desconocida → cadena vacía.
@@ -536,5 +557,54 @@ mod tests {
         db.set_config("language", "en").unwrap();
         db.set_config("language", "es").unwrap();
         assert_eq!(db.config_str("language").unwrap(), "es");
+    }
+
+    #[test]
+    fn open_segment_sets_marker_and_close_clears_it() {
+        let db = Db::open_in_memory().unwrap();
+        let app = db.upsert_app(&safari(), 1000).unwrap();
+
+        let seg = db
+            .open_segment(app, None, SegState::Active, 1000)
+            .unwrap();
+        assert_eq!(db.config_str("open_segment_id").unwrap(), seg.to_string());
+
+        db.close_segment(seg, 1060).unwrap();
+        assert_eq!(db.config_str("open_segment_id").unwrap(), "");
+    }
+
+    #[test]
+    fn recover_closes_dangling_segment_at_last_flushed_end() {
+        let db = Db::open_in_memory().unwrap();
+        let app = db.upsert_app(&safari(), 1000).unwrap();
+
+        // Simula cierre sucio: segmento abierto, flusheado, nunca cerrado.
+        let seg = db
+            .open_segment(app, None, SegState::Active, 1000)
+            .unwrap();
+        db.flush_segment(seg, 1030).unwrap();
+
+        let recovered = db.recover().unwrap();
+        assert_eq!(recovered, Some(seg));
+
+        // Cerrado en el último end_ts conocido, sin rellenar el hueco (§13).
+        let (end_ts, dur): (i64, i64) = db
+            .conn
+            .query_row(
+                "SELECT end_ts, duration_sec FROM segments WHERE id = ?1",
+                [seg],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(end_ts, 1030);
+        assert_eq!(dur, 30);
+        assert_eq!(rollup(&db, &local_day(1000), app), (30, 0));
+        assert_eq!(db.config_str("open_segment_id").unwrap(), "");
+    }
+
+    #[test]
+    fn recover_with_clean_state_does_nothing() {
+        let db = Db::open_in_memory().unwrap();
+        assert_eq!(db.recover().unwrap(), None);
     }
 }
