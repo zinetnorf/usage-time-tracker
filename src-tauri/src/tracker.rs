@@ -29,18 +29,38 @@ pub struct Tracker {
     db: Db,
     current: Option<OpenSeg>,
     blocked: bool,
+    paused: bool,
     last_tick_ts: Option<i64>,
 }
 
 impl Tracker {
     pub fn new(db: Db) -> Result<Self> {
         db.recover()?;
+        let paused = db.config_bool("tracking_paused")?;
         Ok(Tracker {
             db,
             current: None,
             blocked: false,
+            paused,
             last_tick_ts: None,
         })
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused
+    }
+
+    /// Pausa manual desde el tray (§9): cierra el segmento y persiste el
+    /// estado para sobrevivir reinicios (§17).
+    pub fn pause(&mut self, now_ts: i64) -> Result<()> {
+        self.paused = true;
+        self.db.set_config("tracking_paused", "true")?;
+        self.close_current(now_ts)
+    }
+
+    pub fn resume(&mut self) -> Result<()> {
+        self.paused = false;
+        self.db.set_config("tracking_paused", "false")
     }
 
     pub fn db(&self) -> &Db {
@@ -74,7 +94,7 @@ impl Tracker {
     }
 
     pub fn tick(&mut self, obs: &Observation) -> Result<()> {
-        if self.blocked {
+        if self.blocked || self.paused {
             return Ok(());
         }
 
@@ -364,5 +384,38 @@ mod tests {
         assert_eq!(segs.len(), 2);
         assert_eq!(segs[0].3, 1010, "cerrado en el último tick visto");
         assert_eq!(segs[1].2, 2000, "nuevo segmento arranca tras el hueco");
+    }
+
+    #[test]
+    fn pause_closes_segment_persists_and_ignores_ticks() {
+        let db = Db::open_in_memory().unwrap();
+        let mut t = Tracker::new(db).unwrap();
+
+        t.tick(&safari_obs(0, 1000)).unwrap();
+        t.pause(1020).unwrap();
+
+        assert_eq!(segments(&t)[0].3, 1020, "cerrado al pausar");
+        assert!(t.db().config_bool("tracking_paused").unwrap());
+
+        t.tick(&safari_obs(0, 1030)).unwrap();
+        assert_eq!(segments(&t).len(), 1, "pausado: ticks no cuentan");
+
+        t.resume().unwrap();
+        assert!(!t.db().config_bool("tracking_paused").unwrap());
+        t.tick(&safari_obs(0, 1040)).unwrap();
+        assert_eq!(segments(&t).len(), 2);
+        assert_eq!(segments(&t)[1].2, 1040);
+    }
+
+    #[test]
+    fn paused_state_survives_restart() {
+        let db = Db::open_in_memory().unwrap();
+        db.set_config("tracking_paused", "true").unwrap();
+
+        // Simula reinicio: Tracker nuevo sobre una db ya pausada.
+        let mut t = Tracker::new(db).unwrap();
+        t.tick(&safari_obs(0, 1000)).unwrap();
+
+        assert_eq!(segments(&t).len(), 0, "arranca pausado");
     }
 }
