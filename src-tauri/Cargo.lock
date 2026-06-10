@@ -4879,6 +4879,7 @@ name = "usage-tracker"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "core-foundation",
  "plist",
  "rusqlite",
  "serde",
@@ -4889,6 +4890,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
  "user-idle",
+ "windows 0.62.2",
  "x-win",
 ]
 

@@ -30,3 +30,9 @@ tauri-plugin-single-instance = "2.4.2"
 chrono = "0.4.45"
 plist = "1.9.0"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62.2", features = ["Win32_System_StationsAndDesktops", "Win32_Foundation"] }
+

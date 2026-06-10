@@ -63,6 +63,11 @@ impl Tracker {
         self.db.set_config("tracking_paused", "false")
     }
 
+    /// Salida limpia ("Salir" del tray): cierra el segmento en curso.
+    pub fn shutdown(&mut self, now_ts: i64) -> Result<()> {
+        self.close_current(now_ts)
+    }
+
     pub fn db(&self) -> &Db {
         &self.db
     }
@@ -405,6 +410,18 @@ mod tests {
         t.tick(&safari_obs(0, 1040)).unwrap();
         assert_eq!(segments(&t).len(), 2);
         assert_eq!(segments(&t)[1].2, 1040);
+    }
+
+    #[test]
+    fn shutdown_closes_open_segment_at_now() {
+        let db = Db::open_in_memory().unwrap();
+        let mut t = Tracker::new(db).unwrap();
+
+        t.tick(&safari_obs(0, 1000)).unwrap();
+        t.shutdown(1015).unwrap();
+
+        assert_eq!(segments(&t)[0].3, 1015);
+        assert_eq!(t.db().config_str("open_segment_id").unwrap(), "");
     }
 
     #[test]
