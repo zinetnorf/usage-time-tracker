@@ -230,6 +230,35 @@ impl Db {
         Ok(())
     }
 
+    pub fn rename_app(&self, app_id: i64, display_name: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE apps SET display_name = ?2 WHERE id = ?1",
+            rusqlite::params![app_id, display_name],
+        )?;
+        Ok(())
+    }
+
+    /// Fusiona `from` dentro de `into`: reasigna segmentos, suma rollups
+    /// y elimina la app origen. Atómico.
+    pub fn merge_apps(&self, from: i64, into: i64) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE segments SET app_id = ?2 WHERE app_id = ?1",
+            [from, into],
+        )?;
+        tx.execute(
+            "INSERT INTO usage_daily (day, app_id, active_sec, idle_sec)
+             SELECT day, ?2, active_sec, idle_sec FROM usage_daily WHERE app_id = ?1
+             ON CONFLICT(day, app_id) DO UPDATE SET
+               active_sec = active_sec + excluded.active_sec,
+               idle_sec   = idle_sec   + excluded.idle_sec",
+            [from, into],
+        )?;
+        tx.execute("DELETE FROM usage_daily WHERE app_id = ?1", [from])?;
+        tx.execute("DELETE FROM apps WHERE id = ?1", [from])?;
+        tx.commit()
+    }
+
     /// Recovery de arranque (§13): si quedó un segmento abierto de una
     /// sesión previa, lo cierra en su último `end_ts` flusheado. No
     /// rellena el hueco hasta ahora.
@@ -606,5 +635,76 @@ mod tests {
     fn recover_with_clean_state_does_nothing() {
         let db = Db::open_in_memory().unwrap();
         assert_eq!(db.recover().unwrap(), None);
+    }
+
+    fn vscode() -> AppInfo<'static> {
+        AppInfo {
+            identity: "C:\\Program Files\\VS Code\\Code.exe",
+            display_name: "Code.exe",
+            process_name: Some("Code.exe"),
+            exe_path: Some("C:\\Program Files\\VS Code\\Code.exe"),
+            bundle_id: None,
+        }
+    }
+
+    #[test]
+    fn rename_app_changes_display_name() {
+        let db = Db::open_in_memory().unwrap();
+        let id = db.upsert_app(&vscode(), 1000).unwrap();
+
+        db.rename_app(id, "VS Code").unwrap();
+
+        let name: String = db
+            .conn
+            .query_row("SELECT display_name FROM apps WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(name, "VS Code");
+    }
+
+    #[test]
+    fn merge_apps_moves_history_and_sums_rollups() {
+        let db = Db::open_in_memory().unwrap();
+        let a = db.upsert_app(&vscode(), 1000).unwrap();
+        let b = db.upsert_app(&safari(), 1000).unwrap();
+        let day = local_day(1000);
+
+        let s1 = db.open_segment(a, None, SegState::Active, 1000).unwrap();
+        db.close_segment(s1, 1060).unwrap();
+        let s2 = db.open_segment(b, None, SegState::Active, 1060).unwrap();
+        db.close_segment(s2, 1100).unwrap();
+
+        db.merge_apps(a, b).unwrap();
+
+        // Historia reasignada: todos los segmentos apuntan a b.
+        let orphans: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM segments WHERE app_id = ?1",
+                [a],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(orphans, 0);
+
+        // Rollup sumado y fila origen eliminada.
+        assert_eq!(rollup(&db, &day, b), (100, 0));
+        let a_rows: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM usage_daily WHERE app_id = ?1",
+                [a],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(a_rows, 0);
+
+        // La app origen desaparece.
+        let apps: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM apps WHERE id = ?1", [a], |r| r.get(0))
+            .unwrap();
+        assert_eq!(apps, 0);
     }
 }
