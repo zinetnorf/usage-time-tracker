@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "usage-tracker",
+  "productName": "Usage Tracker",
   "version": "0.1.0",
   "identifier": "com.davisg.usage-tracker",
   "build": {
@@ -12,9 +12,9 @@
   "app": {
     "windows": [
       {
-        "title": "usage-tracker",
-        "width": 800,
-        "height": 600
+        "title": "Usage Tracker",
+        "width": 900,
+        "height": 680
       }
     ],
     "security": {
