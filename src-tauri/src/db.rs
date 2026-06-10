@@ -276,6 +276,17 @@ impl Db {
         Ok(Some(seg_id))
     }
 
+    /// Purga segmentos crudos más viejos que `raw_retention_days` (§13).
+    /// Los rollups de `usage_daily` se conservan. Devuelve filas borradas.
+    pub fn purge_old_segments(&self, now_ts: i64) -> Result<usize> {
+        let retention_days = self.config_i64("raw_retention_days")?;
+        let cutoff_day = local_day(now_ts - retention_days * 86_400);
+        self.conn.execute(
+            "DELETE FROM segments WHERE day < ?1",
+            [cutoff_day],
+        )
+    }
+
     /// Defaults del spec §7. Clave desconocida → cadena vacía.
     fn config_default(key: &str) -> &'static str {
         match key {
@@ -706,5 +717,38 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM apps WHERE id = ?1", [a], |r| r.get(0))
             .unwrap();
         assert_eq!(apps, 0);
+    }
+
+    #[test]
+    fn purge_removes_old_segments_but_keeps_rollups() {
+        let db = Db::open_in_memory().unwrap();
+        let app = db.upsert_app(&safari(), 1000).unwrap();
+
+        let now = local_ts(2026, 6, 9, 12, 0, 0);
+        let old = now - 200 * 86_400; // > 180 días de retención
+        let recent = now - 10 * 86_400;
+
+        let s1 = db.open_segment(app, None, SegState::Active, old).unwrap();
+        db.close_segment(s1, old + 60).unwrap();
+        let s2 = db
+            .open_segment(app, None, SegState::Active, recent)
+            .unwrap();
+        db.close_segment(s2, recent + 60).unwrap();
+
+        let purged = db.purge_old_segments(now).unwrap();
+        assert_eq!(purged, 1);
+
+        let days: Vec<String> = {
+            let mut stmt = db.conn.prepare("SELECT day FROM segments").unwrap();
+            stmt.query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+        assert_eq!(days, vec![local_day(recent)]);
+
+        // Rollups intactos: la historia agregada se conserva (§13).
+        assert_eq!(rollup(&db, &local_day(old), app), (60, 0));
+        assert_eq!(rollup(&db, &local_day(recent), app), (60, 0));
     }
 }
