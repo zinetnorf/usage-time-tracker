@@ -33,7 +33,7 @@ Aplicación de escritorio que mide cuánto tiempo usas cada aplicación. Corre e
 
 ## Instalación
 
-Descarga el instalador desde [Releases](https://github.com/zinetnorf/time-usage-tracker/releases):
+Descarga el instalador desde [Releases](https://github.com/zinetnorf/usage-time-tracker/releases):
 
 | Plataforma | Archivo |
 |---|---|
