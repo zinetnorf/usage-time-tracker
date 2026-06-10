@@ -68,6 +68,18 @@ pub fn local_day(ts: i64) -> String {
         .to_string()
 }
 
+/// Epoch de la medianoche local siguiente a `ts` (maneja DST vía chrono).
+fn next_local_midnight(ts: i64) -> i64 {
+    use chrono::{Duration, Local, TimeZone};
+    let dt = Local.timestamp_opt(ts, 0).single().expect("timestamp válido");
+    let next_day = dt.date_naive() + Duration::days(1);
+    Local
+        .from_local_datetime(&next_day.and_hms_opt(0, 0, 0).unwrap())
+        .single()
+        .expect("medianoche local válida")
+        .timestamp()
+}
+
 /// Identidad observada de una app en un tick. `identity` es la clave
 /// canónica: bundle_id en macOS, exe_path en Windows.
 #[derive(Debug, Clone)]
@@ -171,7 +183,34 @@ impl Db {
     }
 
     /// Cierra el segmento y acumula su duración en `usage_daily`.
+    /// Si cruza medianoche local se parte en un segmento por día (§6).
     pub fn close_segment(&self, segment_id: i64, end_ts: i64) -> Result<()> {
+        let mut seg_id = segment_id;
+        loop {
+            let start_ts: i64 = self.conn.query_row(
+                "SELECT start_ts FROM segments WHERE id = ?1",
+                [seg_id],
+                |r| r.get(0),
+            )?;
+            let boundary = next_local_midnight(start_ts);
+            if end_ts <= boundary {
+                self.close_segment_piece(seg_id, end_ts)?;
+                return Ok(());
+            }
+
+            self.close_segment_piece(seg_id, boundary)?;
+            seg_id = self.conn.query_row(
+                "INSERT INTO segments (app_id, window_title, state, start_ts, end_ts, duration_sec, day)
+                 SELECT app_id, window_title, state, ?2, ?2, 0, ?3
+                 FROM segments WHERE id = ?1
+                 RETURNING id",
+                rusqlite::params![seg_id, boundary, local_day(boundary)],
+                |r| r.get(0),
+            )?;
+        }
+    }
+
+    fn close_segment_piece(&self, segment_id: i64, end_ts: i64) -> Result<()> {
         self.flush_segment(segment_id, end_ts)?;
         self.conn.execute(
             "INSERT INTO usage_daily (day, app_id, active_sec, idle_sec)
@@ -374,5 +413,52 @@ mod tests {
         let (active, idle) = rollup(&db, &local_day(1000), app);
         assert_eq!(active, 70, "60 + 10 active");
         assert_eq!(idle, 30);
+    }
+
+    fn local_ts(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> i64 {
+        use chrono::{Local, TimeZone};
+        Local
+            .with_ymd_and_hms(y, mo, d, h, mi, s)
+            .single()
+            .unwrap()
+            .timestamp()
+    }
+
+    #[test]
+    fn close_segment_splits_at_midnight() {
+        let db = Db::open_in_memory().unwrap();
+        let app = db.upsert_app(&safari(), 1000).unwrap();
+
+        let start = local_ts(2026, 6, 8, 23, 59, 0);
+        let end = local_ts(2026, 6, 9, 0, 1, 0);
+        let midnight = local_ts(2026, 6, 9, 0, 0, 0);
+
+        let seg = db
+            .open_segment(app, Some("Tarde"), SegState::Active, start)
+            .unwrap();
+        db.close_segment(seg, end).unwrap();
+
+        let rows: Vec<(String, i64, i64, i64)> = {
+            let mut stmt = db
+                .conn
+                .prepare(
+                    "SELECT day, start_ts, end_ts, duration_sec
+                     FROM segments ORDER BY start_ts",
+                )
+                .unwrap();
+            stmt.query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+        };
+
+        assert_eq!(rows.len(), 2, "segmento debe partirse en dos");
+        assert_eq!(rows[0], ("2026-06-08".into(), start, midnight, 60));
+        assert_eq!(rows[1], ("2026-06-09".into(), midnight, end, 60));
+
+        assert_eq!(rollup(&db, "2026-06-08", app), (60, 0));
+        assert_eq!(rollup(&db, "2026-06-09", app), (60, 0));
     }
 }
