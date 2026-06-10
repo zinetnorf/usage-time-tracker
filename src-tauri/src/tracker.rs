@@ -22,10 +22,14 @@ struct OpenSeg {
     last_flush_ts: i64,
 }
 
+/// Gap mínimo entre ticks para asumir suspensión no notificada (§17).
+const SUSPEND_GAP_SEC: i64 = 30;
+
 pub struct Tracker {
     db: Db,
     current: Option<OpenSeg>,
     blocked: bool,
+    last_tick_ts: Option<i64>,
 }
 
 impl Tracker {
@@ -35,6 +39,7 @@ impl Tracker {
             db,
             current: None,
             blocked: false,
+            last_tick_ts: None,
         })
     }
 
@@ -71,6 +76,15 @@ impl Tracker {
     pub fn tick(&mut self, obs: &Observation) -> Result<()> {
         if self.blocked {
             return Ok(());
+        }
+
+        // Fallback de suspensión: salto de reloj entre ticks → cerrar en
+        // el último tick visto, sin contar el hueco.
+        let last = self.last_tick_ts.replace(obs.now_ts);
+        if let Some(last) = last {
+            if obs.now_ts - last > SUSPEND_GAP_SEC {
+                self.close_current(last)?;
+            }
         }
         let Some(window) = &obs.window else {
             return self.close_current(obs.now_ts);
@@ -218,17 +232,21 @@ mod tests {
         let db = Db::open_in_memory().unwrap();
         let mut t = Tracker::new(db).unwrap();
 
+        // Ticks con cadencia real (< gap de suspensión); idle_seconds es
+        // del sistema y crece aunque los ticks sigan llegando.
         t.tick(&safari_obs(0, 1000)).unwrap();
-        t.tick(&safari_obs(70, 1070)).unwrap(); // >= 60 → idle
-        t.tick(&safari_obs(0, 1080)).unwrap(); // input → active
+        t.tick(&safari_obs(28, 1028)).unwrap();
+        t.tick(&safari_obs(56, 1056)).unwrap(); // aún < 60 → active
+        t.tick(&safari_obs(61, 1061)).unwrap(); // >= 60 → idle
+        t.tick(&safari_obs(0, 1063)).unwrap(); // input → active
 
         let segs = segments(&t);
         assert_eq!(segs.len(), 3);
         assert_eq!(segs[0].1, "active");
         assert_eq!(segs[1].1, "idle");
         assert_eq!(segs[2].1, "active");
-        assert_eq!(segs[0].3, 1070, "active cerrado al pasar a idle");
-        assert_eq!(segs[1].3, 1080, "idle cerrado al volver input");
+        assert_eq!(segs[0].3, 1061, "active cerrado al pasar a idle");
+        assert_eq!(segs[1].3, 1063, "idle cerrado al volver input");
     }
 
     fn open_end_ts(t: &Tracker) -> i64 {
@@ -326,5 +344,25 @@ mod tests {
             "",
             "sin segmento abierto"
         );
+    }
+
+    #[test]
+    fn clock_gap_closes_at_last_seen_tick() {
+        let db = Db::open_in_memory().unwrap();
+        let mut t = Tracker::new(db).unwrap();
+
+        t.tick(&safari_obs(0, 1000)).unwrap();
+        t.tick(&safari_obs(0, 1002)).unwrap();
+        // Gap pequeño (< umbral): el segmento continúa.
+        t.tick(&safari_obs(0, 1010)).unwrap();
+        assert_eq!(segments(&t).len(), 1);
+
+        // Salto grande de reloj = suspensión perdida: cerrar en el último
+        // tick visto, NO contar el hueco (decisión §17).
+        t.tick(&safari_obs(0, 2000)).unwrap();
+        let segs = segments(&t);
+        assert_eq!(segs.len(), 2);
+        assert_eq!(segs[0].3, 1010, "cerrado en el último tick visto");
+        assert_eq!(segs[1].2, 2000, "nuevo segmento arranca tras el hueco");
     }
 }
