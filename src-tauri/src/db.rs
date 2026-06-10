@@ -41,6 +41,33 @@ CREATE TABLE config (
 
 const MIGRATIONS: &[&str] = &[SCHEMA_V1];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SegState {
+    Active,
+    Idle,
+}
+
+impl SegState {
+    fn as_str(self) -> &'static str {
+        match self {
+            SegState::Active => "active",
+            SegState::Idle => "idle",
+        }
+    }
+}
+
+/// Día local 'YYYY-MM-DD' para un epoch en segundos (§6: frontera del día
+/// en hora local).
+pub fn local_day(ts: i64) -> String {
+    use chrono::{Local, TimeZone};
+    Local
+        .timestamp_opt(ts, 0)
+        .single()
+        .expect("timestamp válido")
+        .format("%Y-%m-%d")
+        .to_string()
+}
+
 /// Identidad observada de una app en un tick. `identity` es la clave
 /// canónica: bundle_id en macOS, exe_path en Windows.
 #[derive(Debug, Clone)]
@@ -112,6 +139,52 @@ impl Db {
             ],
             |r| r.get(0),
         )
+    }
+
+    /// Abre un segmento con `end_ts` provisional = `start_ts`.
+    pub fn open_segment(
+        &self,
+        app_id: i64,
+        window_title: Option<&str>,
+        state: SegState,
+        start_ts: i64,
+    ) -> Result<i64> {
+        self.conn.query_row(
+            "INSERT INTO segments (app_id, window_title, state, start_ts, end_ts, duration_sec, day)
+             VALUES (?1, ?2, ?3, ?4, ?4, 0, ?5)
+             RETURNING id",
+            rusqlite::params![app_id, window_title, state.as_str(), start_ts, local_day(start_ts)],
+            |r| r.get(0),
+        )
+    }
+
+    /// Persiste avance del segmento abierto (anti-crash, §5.2.5).
+    /// No toca el rollup: eso ocurre solo al cerrar.
+    pub fn flush_segment(&self, segment_id: i64, end_ts: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE segments
+             SET end_ts = ?2, duration_sec = ?2 - start_ts
+             WHERE id = ?1",
+            rusqlite::params![segment_id, end_ts],
+        )?;
+        Ok(())
+    }
+
+    /// Cierra el segmento y acumula su duración en `usage_daily`.
+    pub fn close_segment(&self, segment_id: i64, end_ts: i64) -> Result<()> {
+        self.flush_segment(segment_id, end_ts)?;
+        self.conn.execute(
+            "INSERT INTO usage_daily (day, app_id, active_sec, idle_sec)
+             SELECT day, app_id,
+                    CASE state WHEN 'active' THEN duration_sec ELSE 0 END,
+                    CASE state WHEN 'idle'   THEN duration_sec ELSE 0 END
+             FROM segments WHERE id = ?1
+             ON CONFLICT(day, app_id) DO UPDATE SET
+               active_sec = active_sec + excluded.active_sec,
+               idle_sec   = idle_sec   + excluded.idle_sec",
+            [segment_id],
+        )?;
+        Ok(())
     }
 
     pub fn schema_version(&self) -> Result<i64> {
@@ -219,5 +292,87 @@ mod tests {
             })
             .unwrap();
         assert_eq!(path.as_deref(), Some("/Applications/Safari.app"));
+    }
+
+    fn rollup(db: &Db, day: &str, app_id: i64) -> (i64, i64) {
+        db.conn
+            .query_row(
+                "SELECT active_sec, idle_sec FROM usage_daily WHERE day = ?1 AND app_id = ?2",
+                rusqlite::params![day, app_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn open_segment_starts_with_provisional_end() {
+        let db = Db::open_in_memory().unwrap();
+        let app = db.upsert_app(&safari(), 1000).unwrap();
+        let seg = db
+            .open_segment(app, Some("Inicio"), SegState::Active, 1000)
+            .unwrap();
+
+        let (end_ts, dur, day): (i64, i64, String) = db
+            .conn
+            .query_row(
+                "SELECT end_ts, duration_sec, day FROM segments WHERE id = ?1",
+                [seg],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(end_ts, 1000);
+        assert_eq!(dur, 0);
+        assert_eq!(day, local_day(1000));
+    }
+
+    #[test]
+    fn flush_segment_updates_end_without_rollup() {
+        let db = Db::open_in_memory().unwrap();
+        let app = db.upsert_app(&safari(), 1000).unwrap();
+        let seg = db
+            .open_segment(app, None, SegState::Active, 1000)
+            .unwrap();
+
+        db.flush_segment(seg, 1030).unwrap();
+
+        let (end_ts, dur): (i64, i64) = db
+            .conn
+            .query_row(
+                "SELECT end_ts, duration_sec FROM segments WHERE id = ?1",
+                [seg],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(end_ts, 1030);
+        assert_eq!(dur, 30);
+
+        let rows: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM usage_daily", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 0, "flush must not touch rollup");
+    }
+
+    #[test]
+    fn close_segment_updates_rollup_by_state() {
+        let db = Db::open_in_memory().unwrap();
+        let app = db.upsert_app(&safari(), 1000).unwrap();
+
+        let s1 = db
+            .open_segment(app, None, SegState::Active, 1000)
+            .unwrap();
+        db.close_segment(s1, 1060).unwrap();
+
+        let s2 = db.open_segment(app, None, SegState::Idle, 1060).unwrap();
+        db.close_segment(s2, 1090).unwrap();
+
+        let s3 = db
+            .open_segment(app, None, SegState::Active, 1090)
+            .unwrap();
+        db.close_segment(s3, 1100).unwrap();
+
+        let (active, idle) = rollup(&db, &local_day(1000), app);
+        assert_eq!(active, 70, "60 + 10 active");
+        assert_eq!(idle, 30);
     }
 }
