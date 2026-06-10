@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   CartesianGrid,
@@ -17,6 +17,7 @@ import {
   type AppDayUsage,
   type DayTotals,
 } from "../lib/format";
+import { exportReport, withoutBlacklisted } from "../lib/pdf";
 
 const RANGES = [7, 14, 30] as const;
 type RangeDays = (typeof RANGES)[number];
@@ -30,6 +31,32 @@ export function HistoryView({ countIdle }: Props) {
   const [rangeDays, setRangeDays] = useState<RangeDays>(7);
   const [totals, setTotals] = useState<DayTotals[]>([]);
   const [byApp, setByApp] = useState<AppDayUsage[]>([]);
+  const chartRef = useRef<HTMLDivElement>(null);
+
+  const exportPdf = async () => {
+    const clean = await withoutBlacklisted(byApp);
+    const days = lastNDays(rangeDays);
+    await exportReport(
+      t("pdf.reportTitle"),
+      t("pdf.generated", { date: new Date().toLocaleString() }),
+      [
+        {
+          section: `${t("pdf.trendSection")} — ${days[0]} → ${days[days.length - 1]}`,
+          chart: chartRef.current?.querySelector("svg"),
+          days: totals,
+        },
+        { section: t("pdf.byAppSection"), apps: clean },
+      ],
+      {
+        app: t("pdf.app"),
+        active: t("pdf.active"),
+        idle: t("pdf.idle"),
+        total: t("pdf.total"),
+        day: t("pdf.day"),
+      },
+      `usage-${days[0]}-${days[days.length - 1]}.pdf`,
+    );
+  };
 
   useEffect(
     function loadRange() {
@@ -59,7 +86,7 @@ export function HistoryView({ countIdle }: Props) {
 
   return (
     <div className="space-y-6">
-      <div className="flex gap-2">
+      <div className="flex gap-2 items-center">
         {RANGES.map((n) => (
           <button
             key={n}
@@ -73,13 +100,21 @@ export function HistoryView({ countIdle }: Props) {
             {t(`history.range${n}`)}
           </button>
         ))}
+        {hasData ? (
+          <button
+            onClick={exportPdf}
+            className="ml-auto px-3 py-1.5 text-sm rounded border border-zinc-700 hover:border-zinc-500"
+          >
+            {t("pdf.export")}
+          </button>
+        ) : null}
       </div>
 
       {hasData ? (
         <>
           <div>
             <p className="text-sm text-zinc-400 mb-2">{t("history.trend")}</p>
-            <div className="h-56">
+            <div className="h-56" ref={chartRef}>
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={chartData} margin={{ top: 4, right: 8, left: 8 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#3f3f46" />

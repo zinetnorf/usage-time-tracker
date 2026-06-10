@@ -29,6 +29,7 @@ tauri-plugin-autostart = "2.5.1"
 tauri-plugin-single-instance = "2.4.2"
 chrono = "0.4.45"
 plist = "1.9.0"
+tauri-plugin-dialog = "2.7.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"

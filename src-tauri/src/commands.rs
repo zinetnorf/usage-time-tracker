@@ -91,6 +91,13 @@ pub fn get_settings(state: State<AppState>) -> Result<std::collections::HashMap<
     Ok(out)
 }
 
+/// Escribe bytes en un path elegido por el usuario vía diálogo nativo
+/// (export PDF). Solo escritura local, coherente con privacidad (§2.1).
+#[tauri::command]
+pub fn save_file(path: String, bytes: Vec<u8>) -> Result<(), String> {
+    std::fs::write(&path, bytes).map_err(err_str)
+}
+
 #[tauri::command]
 pub fn set_app_blacklisted(
     state: State<AppState>,

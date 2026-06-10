@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Bar,
@@ -15,6 +15,7 @@ import {
   topApps,
   type AppDayUsage,
 } from "../lib/format";
+import { exportReport, withoutBlacklisted } from "../lib/pdf";
 
 const REFRESH_MS = 15_000;
 
@@ -26,6 +27,36 @@ interface Props {
 export function TodayView({ countIdle, topCount }: Props) {
   const { t } = useTranslation();
   const [rows, setRows] = useState<AppDayUsage[]>([]);
+  const chartRef = useRef<HTMLDivElement>(null);
+
+  const exportPdf = async () => {
+    const clean = await withoutBlacklisted(rows);
+    const totalClean = clean.reduce(
+      (acc, r) => acc + r.active_sec + (countIdle ? r.idle_sec : 0),
+      0,
+    );
+    const today = new Date().toISOString().slice(0, 10);
+    await exportReport(
+      t("pdf.reportTitle"),
+      t("pdf.generated", { date: new Date().toLocaleString() }),
+      [
+        {
+          section: `${t("pdf.todaySection")} — ${today}`,
+          total: { label: t("pdf.total"), sec: totalClean },
+          chart: chartRef.current?.querySelector("svg"),
+          apps: clean,
+        },
+      ],
+      {
+        app: t("pdf.app"),
+        active: t("pdf.active"),
+        idle: t("pdf.idle"),
+        total: t("pdf.total"),
+        day: t("pdf.day"),
+      },
+      `usage-${today}.pdf`,
+    );
+  };
 
   useEffect(
     function pollTodaySummary() {
@@ -72,14 +103,22 @@ export function TodayView({ countIdle, topCount }: Props) {
 
   return (
     <div className="space-y-6">
-      <div>
-        <p className="text-sm text-zinc-400">{t("today.total")}</p>
-        <p className="text-4xl font-semibold tabular-nums">
-          {formatDuration(totalSec)}
-        </p>
+      <div className="flex items-end justify-between">
+        <div>
+          <p className="text-sm text-zinc-400">{t("today.total")}</p>
+          <p className="text-4xl font-semibold tabular-nums">
+            {formatDuration(totalSec)}
+          </p>
+        </div>
+        <button
+          onClick={exportPdf}
+          className="px-3 py-1.5 text-sm rounded border border-zinc-700 hover:border-zinc-500"
+        >
+          {t("pdf.export")}
+        </button>
       </div>
 
-      <div className="h-72">
+      <div className="h-72" ref={chartRef}>
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={chartData} margin={{ top: 4, right: 8, left: 8 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#3f3f46" />
