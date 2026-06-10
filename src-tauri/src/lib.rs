@@ -34,13 +34,15 @@ pub fn run() {
             let db_path = data_dir.join("usage.db");
             let database = db::Db::open(&db_path)?;
 
-            // Autostart según config (§7).
-            let autostart_enabled = database.config_bool("autostart_enabled")?;
-            let autolaunch = app.autolaunch();
-            if autostart_enabled {
-                let _ = autolaunch.enable();
-            } else {
-                let _ = autolaunch.disable();
+            // Autostart según config (§7); antes del onboarding no se toca:
+            // es el onboarding quien lo decide (§10).
+            if database.config_bool("onboarding_done")? {
+                let autolaunch = app.autolaunch();
+                if database.config_bool("autostart_enabled")? {
+                    let _ = autolaunch.enable();
+                } else {
+                    let _ = autolaunch.disable();
+                }
             }
 
             app.manage(AppState {
@@ -81,6 +83,9 @@ pub fn run() {
             commands::merge_apps,
             commands::get_settings,
             commands::set_setting,
+            commands::get_onboarding,
+            commands::open_accessibility_settings,
+            commands::finish_onboarding,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

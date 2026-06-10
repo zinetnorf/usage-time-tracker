@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { invoke } from "@tauri-apps/api/core";
 import { api, type Settings } from "./lib/api";
 import { AppsView } from "./views/AppsView";
 import { HistoryView } from "./views/HistoryView";
+import { OnboardingView, type OnboardingStatus } from "./views/OnboardingView";
 import { SettingsView } from "./views/SettingsView";
 import { TodayView } from "./views/TodayView";
 
@@ -13,12 +15,16 @@ export default function App() {
   const { t, i18n } = useTranslation();
   const [tab, setTab] = useState<Tab>("today");
   const [settings, setSettings] = useState<Settings | null>(null);
+  const [onboarding, setOnboarding] = useState<OnboardingStatus | null>(null);
 
   useEffect(function loadSettings() {
-    api.settings().then((loaded) => {
-      setSettings(loaded);
-      i18n.changeLanguage(loaded.language ?? "es");
-    });
+    Promise.all([api.settings(), invoke<OnboardingStatus>("get_onboarding")]).then(
+      ([loaded, status]) => {
+        setSettings(loaded);
+        setOnboarding(status);
+        i18n.changeLanguage(loaded.language ?? "es");
+      },
+    );
   }, []);
 
   const changeSetting = (key: string, value: string) => {
@@ -27,7 +33,16 @@ export default function App() {
     if (key === "language") i18n.changeLanguage(value);
   };
 
-  if (!settings) return null;
+  if (!settings || !onboarding) return null;
+
+  if (!onboarding.done) {
+    return (
+      <OnboardingView
+        status={onboarding}
+        onFinished={() => setOnboarding({ ...onboarding, done: true })}
+      />
+    );
+  }
 
   const countIdle = settings.count_idle_as_usage === "true";
   const topCount = Number(settings.top_apps_count) || 10;

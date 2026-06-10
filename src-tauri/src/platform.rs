@@ -172,6 +172,22 @@ pub fn is_session_locked() -> bool {
     false
 }
 
+/// ¿Tiene la app permiso de Accesibilidad? (macOS, §10). Sin él los
+/// títulos de ventana llegan vacíos pero el conteo por app funciona.
+#[cfg(target_os = "macos")]
+pub fn accessibility_granted() -> bool {
+    #[link(name = "ApplicationServices", kind = "framework")]
+    unsafe extern "C" {
+        fn AXIsProcessTrusted() -> bool;
+    }
+    unsafe { AXIsProcessTrusted() }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn accessibility_granted() -> bool {
+    true
+}
+
 /// Identidad resuelta de la app observada (§11).
 #[derive(Debug, Clone)]
 pub struct ResolvedApp {

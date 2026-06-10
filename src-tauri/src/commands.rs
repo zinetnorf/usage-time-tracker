@@ -1,6 +1,8 @@
 use crate::db::{local_day, AppDayUsage, AppRow, DayTotals};
 use crate::AppState;
 use tauri::State;
+use tauri_plugin_autostart::ManagerExt;
+use tauri_plugin_opener::OpenerExt;
 
 /// Claves de configuración expuestas a la UI (§7 + pausa).
 const CONFIG_KEYS: &[&str] = &[
@@ -14,7 +16,15 @@ const CONFIG_KEYS: &[&str] = &[
     "language",
     "top_apps_count",
     "tracking_paused",
+    "onboarding_done",
 ];
+
+#[derive(serde::Serialize)]
+pub struct OnboardingStatus {
+    pub done: bool,
+    pub is_macos: bool,
+    pub accessibility_granted: bool,
+}
 
 fn err_str<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
@@ -79,6 +89,46 @@ pub fn get_settings(state: State<AppState>) -> Result<std::collections::HashMap<
         out.insert((*key).to_string(), db.config_str(key).map_err(err_str)?);
     }
     Ok(out)
+}
+
+#[tauri::command]
+pub fn get_onboarding(state: State<AppState>) -> Result<OnboardingStatus, String> {
+    let db = state.db.lock().map_err(err_str)?;
+    Ok(OnboardingStatus {
+        done: db.config_bool("onboarding_done").map_err(err_str)?,
+        is_macos: cfg!(target_os = "macos"),
+        accessibility_granted: crate::platform::accessibility_granted(),
+    })
+}
+
+/// Abre el panel de Accesibilidad de Ajustes del sistema (§10).
+#[tauri::command]
+pub fn open_accessibility_settings(app: tauri::AppHandle) -> Result<(), String> {
+    app.opener()
+        .open_url(
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+            None::<&str>,
+        )
+        .map_err(err_str)
+}
+
+#[tauri::command]
+pub fn finish_onboarding(
+    app: tauri::AppHandle,
+    state: State<AppState>,
+    autostart: bool,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(err_str)?;
+    db.set_config("onboarding_done", "true").map_err(err_str)?;
+    db.set_config("autostart_enabled", if autostart { "true" } else { "false" })
+        .map_err(err_str)?;
+    let autolaunch = app.autolaunch();
+    let result = if autostart {
+        autolaunch.enable()
+    } else {
+        autolaunch.disable()
+    };
+    result.map_err(err_str)
 }
 
 #[tauri::command]

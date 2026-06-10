@@ -4,6 +4,20 @@ import { initReactI18next } from "react-i18next";
 const resources = {
   es: {
     translation: {
+      onboarding: {
+        title: "Bienvenido a Usage Tracker",
+        what: "Esta app mide cuánto tiempo usas cada aplicación: detecta la ventana en primer plano y distingue entre tiempo activo (con teclado/mouse) e inactivo. Vive en la bandeja del sistema y sigue contando con la ventana cerrada.",
+        privacy:
+          "Todo es 100% local: los datos nunca salen de este equipo. Sin telemetría, sin red, sin cuentas.",
+        autostart: "Iniciar automáticamente al arrancar la sesión",
+        axTitle: "Permiso de Accesibilidad:",
+        axGranted: "concedido ✓",
+        axPending: "pendiente",
+        axWhy: "macOS lo exige para leer el título de la ventana activa. Sin él la app cuenta el tiempo por aplicación igualmente, pero sin títulos.",
+        axOpen: "Abrir Ajustes del sistema",
+        axRelaunch: "Tras concederlo hay que relanzar la app para que tome efecto.",
+        start: "Empezar",
+      },
       tabs: { today: "Hoy", history: "Histórico", apps: "Apps", settings: "Ajustes" },
       today: {
         total: "Uso total de hoy",
@@ -51,6 +65,20 @@ const resources = {
   },
   en: {
     translation: {
+      onboarding: {
+        title: "Welcome to Usage Tracker",
+        what: "This app measures how long you use each application: it detects the foreground window and distinguishes active time (keyboard/mouse) from idle time. It lives in the system tray and keeps counting with the window closed.",
+        privacy:
+          "Everything is 100% local: data never leaves this device. No telemetry, no network, no accounts.",
+        autostart: "Launch automatically at login",
+        axTitle: "Accessibility permission:",
+        axGranted: "granted ✓",
+        axPending: "pending",
+        axWhy: "macOS requires it to read the active window title. Without it the app still counts time per application, just without titles.",
+        axOpen: "Open System Settings",
+        axRelaunch: "After granting it, relaunch the app for it to take effect.",
+        start: "Get started",
+      },
       tabs: { today: "Today", history: "History", apps: "Apps", settings: "Settings" },
       today: {
         total: "Total usage today",

@@ -422,6 +422,7 @@ impl Db {
             "language" => "es",
             "top_apps_count" => "10",
             "tracking_paused" => "false",
+            "onboarding_done" => "false",
             _ => "",
         }
     }
