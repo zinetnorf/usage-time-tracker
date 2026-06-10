@@ -226,6 +226,56 @@ impl Db {
         Ok(())
     }
 
+    /// Defaults del spec §7. Clave desconocida → cadena vacía.
+    fn config_default(key: &str) -> &'static str {
+        match key {
+            "idle_threshold_sec" => "60",
+            "count_idle_as_usage" => "true",
+            "track_window_titles" => "true",
+            "poll_interval_ms" => "1500",
+            "flush_interval_sec" => "30",
+            "raw_retention_days" => "180",
+            "autostart_enabled" => "true",
+            "language" => "es",
+            "top_apps_count" => "10",
+            "tracking_paused" => "false",
+            _ => "",
+        }
+    }
+
+    pub fn config_str(&self, key: &str) -> Result<String> {
+        let stored: Option<String> = self
+            .conn
+            .query_row("SELECT value FROM config WHERE key = ?1", [key], |r| {
+                r.get(0)
+            })
+            .map(Some)
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other),
+            })?;
+        Ok(stored.unwrap_or_else(|| Self::config_default(key).to_string()))
+    }
+
+    pub fn config_i64(&self, key: &str) -> Result<i64> {
+        Ok(self.config_str(key)?.parse().unwrap_or_else(|_| {
+            Self::config_default(key).parse().unwrap_or(0)
+        }))
+    }
+
+    pub fn config_bool(&self, key: &str) -> Result<bool> {
+        Ok(self.config_str(key)? == "true")
+    }
+
+    pub fn set_config(&self, key: &str, value: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO config (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            rusqlite::params![key, value],
+        )?;
+        Ok(())
+    }
+
     pub fn schema_version(&self) -> Result<i64> {
         self.conn.query_row(
             "SELECT COALESCE(MAX(version), 0) FROM schema_meta",
@@ -460,5 +510,31 @@ mod tests {
 
         assert_eq!(rollup(&db, "2026-06-08", app), (60, 0));
         assert_eq!(rollup(&db, "2026-06-09", app), (60, 0));
+    }
+
+    #[test]
+    fn config_returns_spec_defaults_when_missing() {
+        let db = Db::open_in_memory().unwrap();
+        assert_eq!(db.config_i64("idle_threshold_sec").unwrap(), 60);
+        assert_eq!(db.config_i64("poll_interval_ms").unwrap(), 1500);
+        assert_eq!(db.config_i64("flush_interval_sec").unwrap(), 30);
+        assert_eq!(db.config_i64("raw_retention_days").unwrap(), 180);
+        assert_eq!(db.config_i64("top_apps_count").unwrap(), 10);
+        assert!(db.config_bool("count_idle_as_usage").unwrap());
+        assert!(db.config_bool("track_window_titles").unwrap());
+        assert!(db.config_bool("autostart_enabled").unwrap());
+        assert!(!db.config_bool("tracking_paused").unwrap());
+        assert_eq!(db.config_str("language").unwrap(), "es");
+    }
+
+    #[test]
+    fn config_set_then_get_roundtrip() {
+        let db = Db::open_in_memory().unwrap();
+        db.set_config("idle_threshold_sec", "120").unwrap();
+        assert_eq!(db.config_i64("idle_threshold_sec").unwrap(), 120);
+
+        db.set_config("language", "en").unwrap();
+        db.set_config("language", "es").unwrap();
+        assert_eq!(db.config_str("language").unwrap(), "es");
     }
 }
