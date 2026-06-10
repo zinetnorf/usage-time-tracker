@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod db;
+pub mod platform;
 pub mod tracker;
 
 use std::sync::Mutex;
