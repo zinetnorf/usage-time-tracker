@@ -81,6 +81,7 @@ pub fn run() {
             commands::get_apps,
             commands::rename_app,
             commands::merge_apps,
+            commands::set_app_blacklisted,
             commands::get_settings,
             commands::set_setting,
             commands::get_onboarding,

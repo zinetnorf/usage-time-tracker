@@ -97,6 +97,7 @@ export function TodayView({ countIdle, topCount }: Props) {
               width={70}
             />
             <Tooltip
+              cursor={{ fill: "rgba(63, 63, 70, 0.35)" }}
               formatter={(value, name) => [
                 formatDuration(Number(value ?? 0)),
                 name === "activo" ? t("today.active") : t("today.idle"),

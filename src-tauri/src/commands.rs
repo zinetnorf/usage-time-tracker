@@ -92,6 +92,16 @@ pub fn get_settings(state: State<AppState>) -> Result<std::collections::HashMap<
 }
 
 #[tauri::command]
+pub fn set_app_blacklisted(
+    state: State<AppState>,
+    app_id: i64,
+    blacklisted: bool,
+) -> Result<(), String> {
+    let db = state.db.lock().map_err(err_str)?;
+    db.set_blacklisted(app_id, blacklisted).map_err(err_str)
+}
+
+#[tauri::command]
 pub fn get_onboarding(state: State<AppState>) -> Result<OnboardingStatus, String> {
     let db = state.db.lock().map_err(err_str)?;
     Ok(OnboardingStatus {

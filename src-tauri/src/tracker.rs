@@ -115,6 +115,11 @@ impl Tracker {
             return self.close_current(obs.now_ts);
         };
 
+        // Blacklist (Fase 2): la app se ignora como si no hubiera foreground.
+        if self.db.is_blacklisted(window.app.identity)? {
+            return self.close_current(obs.now_ts);
+        }
+
         let threshold = self.db.config_i64("idle_threshold_sec")?;
         let state = if obs.idle_seconds >= threshold {
             SegState::Idle
@@ -422,6 +427,31 @@ mod tests {
 
         assert_eq!(segments(&t)[0].3, 1015);
         assert_eq!(t.db().config_str("open_segment_id").unwrap(), "");
+    }
+
+    #[test]
+    fn blacklisted_app_is_not_tracked_and_closes_current() {
+        let db = Db::open_in_memory().unwrap();
+        let code_id = db.upsert_app(&vscode_obs(0, 0).window.unwrap().app, 900).unwrap();
+        db.set_blacklisted(code_id, true).unwrap();
+        let mut t = Tracker::new(db).unwrap();
+
+        // Safari trackea normal; cambiar a la blacklisteada cierra y NO abre.
+        t.tick(&safari_obs(0, 1000)).unwrap();
+        t.tick(&vscode_obs(0, 1020)).unwrap();
+
+        let segs = segments(&t);
+        assert_eq!(segs.len(), 1, "no se abre segmento para blacklisteada");
+        assert_eq!(segs[0].3, 1020, "el anterior se cierra al cambiar");
+
+        // Mientras siga en foreground, nada se persiste.
+        t.tick(&vscode_obs(0, 1030)).unwrap();
+        assert_eq!(segments(&t).len(), 1);
+
+        // Volver a una app normal reabre.
+        t.tick(&safari_obs(0, 1040)).unwrap();
+        assert_eq!(segments(&t).len(), 2);
+        assert_eq!(segments(&t)[1].2, 1040);
     }
 
     #[test]

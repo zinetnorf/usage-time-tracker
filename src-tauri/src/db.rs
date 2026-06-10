@@ -39,7 +39,11 @@ CREATE TABLE config (
 );
 ";
 
-const MIGRATIONS: &[&str] = &[SCHEMA_V1];
+const SCHEMA_V2: &str = "
+ALTER TABLE apps ADD COLUMN blacklisted INTEGER NOT NULL DEFAULT 0;
+";
+
+const MIGRATIONS: &[&str] = &[SCHEMA_V1, SCHEMA_V2];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SegState {
@@ -89,6 +93,7 @@ pub struct AppRow {
     pub process_name: Option<String>,
     pub exe_path: Option<String>,
     pub bundle_id: Option<String>,
+    pub blacklisted: bool,
 }
 
 /// Totales de un día (línea de tendencia del Histórico).
@@ -340,7 +345,7 @@ impl Db {
 
     pub fn list_apps(&self) -> Result<Vec<AppRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, identity, display_name, process_name, exe_path, bundle_id
+            "SELECT id, identity, display_name, process_name, exe_path, bundle_id, blacklisted
              FROM apps ORDER BY display_name COLLATE NOCASE",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -351,9 +356,37 @@ impl Db {
                 process_name: r.get(3)?,
                 exe_path: r.get(4)?,
                 bundle_id: r.get(5)?,
+                blacklisted: r.get::<_, i64>(6)? != 0,
             })
         })?;
         rows.collect()
+    }
+
+    /// Marca/desmarca una app para excluirla del tracking (Fase 2).
+    /// La historia ya registrada se conserva.
+    pub fn set_blacklisted(&self, app_id: i64, blacklisted: bool) -> Result<()> {
+        self.conn.execute(
+            "UPDATE apps SET blacklisted = ?2 WHERE id = ?1",
+            rusqlite::params![app_id, blacklisted as i64],
+        )?;
+        Ok(())
+    }
+
+    /// ¿Está la identidad excluida del tracking? Identidad desconocida → no.
+    pub fn is_blacklisted(&self, identity: &str) -> Result<bool> {
+        let found: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT blacklisted FROM apps WHERE identity = ?1",
+                [identity],
+                |r| r.get(0),
+            )
+            .map(Some)
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other),
+            })?;
+        Ok(found.unwrap_or(0) != 0)
     }
 
     /// Totales por día en un rango inclusivo de días 'YYYY-MM-DD'.
@@ -485,10 +518,10 @@ mod tests {
     }
 
     #[test]
-    fn open_in_memory_applies_schema_v1() {
+    fn open_in_memory_applies_full_schema() {
         let db = Db::open_in_memory().unwrap();
 
-        assert_eq!(db.schema_version().unwrap(), 1);
+        assert_eq!(db.schema_version().unwrap(), MIGRATIONS.len() as i64);
 
         let tables = table_names(&db);
         for t in ["apps", "segments", "usage_daily", "config", "schema_meta"] {
@@ -500,7 +533,7 @@ mod tests {
     fn reopening_does_not_rerun_migrations() {
         let db = Db::open_in_memory().unwrap();
         db.apply_migrations().unwrap();
-        assert_eq!(db.schema_version().unwrap(), 1);
+        assert_eq!(db.schema_version().unwrap(), MIGRATIONS.len() as i64);
     }
 
     fn safari() -> AppInfo<'static> {
@@ -990,5 +1023,49 @@ mod tests {
         assert_eq!(apps[0].display_name, "Code.exe");
         assert_eq!(apps[1].display_name, "Safari");
         assert_eq!(apps[1].identity, "com.apple.Safari");
+    }
+
+    #[test]
+    fn schema_v2_adds_blacklist_defaulting_false() {
+        let db = Db::open_in_memory().unwrap();
+        assert_eq!(db.schema_version().unwrap(), 2);
+
+        let id = db.upsert_app(&safari(), 1000).unwrap();
+        assert!(!db.is_blacklisted("com.apple.Safari").unwrap());
+
+        db.set_blacklisted(id, true).unwrap();
+        assert!(db.is_blacklisted("com.apple.Safari").unwrap());
+        assert!(db.list_apps().unwrap()[0].blacklisted);
+
+        db.set_blacklisted(id, false).unwrap();
+        assert!(!db.is_blacklisted("com.apple.Safari").unwrap());
+    }
+
+    #[test]
+    fn unknown_identity_is_not_blacklisted() {
+        let db = Db::open_in_memory().unwrap();
+        assert!(!db.is_blacklisted("no.existe").unwrap());
+    }
+
+    #[test]
+    fn v1_database_migrates_to_v2_preserving_data() {
+        // Base v1 real: solo la primera migración aplicada.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE schema_meta (version INTEGER NOT NULL);")
+            .unwrap();
+        conn.execute_batch(MIGRATIONS[0]).unwrap();
+        conn.execute("INSERT INTO schema_meta (version) VALUES (1)", [])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO apps (identity, display_name, created_at) VALUES ('x', 'X', 1)",
+            [],
+        )
+        .unwrap();
+
+        let db = Db::from_conn(conn).unwrap();
+        assert_eq!(db.schema_version().unwrap(), 2);
+        let apps = db.list_apps().unwrap();
+        assert_eq!(apps.len(), 1, "datos v1 preservados");
+        assert!(!apps[0].blacklisted);
     }
 }

@@ -48,10 +48,27 @@ export function AppsView() {
           <li key={app.id} className="py-2 space-y-2">
             <div className="flex items-center justify-between gap-4">
               <div className="min-w-0">
-                <p className="truncate">{app.display_name}</p>
+                <p className={`truncate ${app.blacklisted ? "text-zinc-500 line-through" : ""}`}>
+                  {app.display_name}
+                </p>
                 <p className="truncate text-xs text-zinc-500">{app.identity}</p>
               </div>
-              <div className="flex gap-2 shrink-0">
+              <div className="flex gap-2 shrink-0 items-center">
+                <label
+                  className="flex items-center gap-1.5 text-xs text-zinc-400 cursor-pointer"
+                  title={t("apps.blacklistHint")}
+                >
+                  <input
+                    type="checkbox"
+                    checked={app.blacklisted}
+                    onChange={async (e) => {
+                      await api.setAppBlacklisted(app.id, e.target.checked);
+                      await reload();
+                    }}
+                    className="h-3.5 w-3.5 accent-amber-500"
+                  />
+                  {t("apps.blacklist")}
+                </label>
                 <button
                   onClick={() => {
                     setMerging(null);

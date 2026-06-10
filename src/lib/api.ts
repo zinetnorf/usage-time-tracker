@@ -8,6 +8,7 @@ export interface AppRow {
   process_name: string | null;
   exe_path: string | null;
   bundle_id: string | null;
+  blacklisted: boolean;
 }
 
 export type Settings = Record<string, string>;
@@ -24,6 +25,8 @@ export const api = {
     invoke<void>("rename_app", { appId, name }),
   mergeApps: (fromId: number, intoId: number) =>
     invoke<void>("merge_apps", { fromId, intoId }),
+  setAppBlacklisted: (appId: number, blacklisted: boolean) =>
+    invoke<void>("set_app_blacklisted", { appId, blacklisted }),
   settings: () => invoke<Settings>("get_settings"),
   setSetting: (key: string, value: string) =>
     invoke<void>("set_setting", { key, value }),

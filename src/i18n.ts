@@ -41,6 +41,9 @@ const resources = {
         mergeInto: "Fusionar «{{from}}» dentro de:",
         mergeConfirm:
           "La historia de «{{from}}» pasará a «{{into}}» y la entrada desaparecerá. ¿Continuar?",
+        blacklist: "No trackear",
+        blacklistHint:
+          "Excluir del tracking. La historia ya registrada se conserva.",
         cancel: "Cancelar",
         save: "Guardar",
         empty: "Aún no hay apps detectadas.",
@@ -102,6 +105,8 @@ const resources = {
         mergeInto: "Merge “{{from}}” into:",
         mergeConfirm:
           "The history of “{{from}}” will move to “{{into}}” and the entry will disappear. Continue?",
+        blacklist: "Don't track",
+        blacklistHint: "Exclude from tracking. Already recorded history is kept.",
         cancel: "Cancel",
         save: "Save",
         empty: "No apps detected yet.",
