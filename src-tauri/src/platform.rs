@@ -1,8 +1,14 @@
-/// Raíz del bundle .app a partir del path del ejecutable (macOS, §11).
-/// `/Apps/Safari.app/Contents/MacOS/Safari` → `/Apps/Safari.app`.
+/// Raíz del bundle .app a partir del path reportado (macOS, §11).
+/// Acepta el ejecutable interno (`…/X.app/Contents/MacOS/X`) o el bundle
+/// mismo (`…/X.app`), que es lo que reporta x-win.
 pub fn bundle_root(exe_path: &str) -> Option<String> {
-    let idx = exe_path.find(".app/")?;
-    Some(exe_path[..idx + 4].to_string())
+    if let Some(idx) = exe_path.find(".app/") {
+        return Some(exe_path[..idx + 4].to_string());
+    }
+    if exe_path.ends_with(".app") {
+        return Some(exe_path.to_string());
+    }
+    None
 }
 
 /// CFBundleIdentifier desde `<bundle>/Contents/Info.plist` (macOS, §11).
@@ -225,6 +231,15 @@ mod tests {
         assert_eq!(
             bundle_root("/Applications/Visual Studio Code.app/Contents/MacOS/Electron"),
             Some("/Applications/Visual Studio Code.app".to_string())
+        );
+    }
+
+    #[test]
+    fn bundle_root_accepts_bundle_path_itself() {
+        // x-win en macOS reporta el bundle como path, sin /Contents/...
+        assert_eq!(
+            bundle_root("/Applications/Cursor.app"),
+            Some("/Applications/Cursor.app".to_string())
         );
     }
 
