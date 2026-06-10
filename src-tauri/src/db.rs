@@ -41,6 +41,17 @@ CREATE TABLE config (
 
 const MIGRATIONS: &[&str] = &[SCHEMA_V1];
 
+/// Identidad observada de una app en un tick. `identity` es la clave
+/// canónica: bundle_id en macOS, exe_path en Windows.
+#[derive(Debug, Clone)]
+pub struct AppInfo<'a> {
+    pub identity: &'a str,
+    pub display_name: &'a str,
+    pub process_name: Option<&'a str>,
+    pub exe_path: Option<&'a str>,
+    pub bundle_id: Option<&'a str>,
+}
+
 pub struct Db {
     pub(crate) conn: Connection,
 }
@@ -77,6 +88,30 @@ impl Db {
             }
         }
         Ok(())
+    }
+
+    /// Inserta la app si no existe (por `identity`) y devuelve su id.
+    /// Refresca metadatos en upserts posteriores pero NUNCA pisa
+    /// `display_name`: es editable por el usuario.
+    pub fn upsert_app(&self, app: &AppInfo, now_ts: i64) -> Result<i64> {
+        self.conn.query_row(
+            "INSERT INTO apps (identity, display_name, process_name, exe_path, bundle_id, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(identity) DO UPDATE SET
+               process_name = excluded.process_name,
+               exe_path     = excluded.exe_path,
+               bundle_id    = excluded.bundle_id
+             RETURNING id",
+            rusqlite::params![
+                app.identity,
+                app.display_name,
+                app.process_name,
+                app.exe_path,
+                app.bundle_id,
+                now_ts
+            ],
+            |r| r.get(0),
+        )
     }
 
     pub fn schema_version(&self) -> Result<i64> {
@@ -120,5 +155,69 @@ mod tests {
         let db = Db::open_in_memory().unwrap();
         db.apply_migrations().unwrap();
         assert_eq!(db.schema_version().unwrap(), 1);
+    }
+
+    fn safari() -> AppInfo<'static> {
+        AppInfo {
+            identity: "com.apple.Safari",
+            display_name: "Safari",
+            process_name: Some("Safari"),
+            exe_path: None,
+            bundle_id: Some("com.apple.Safari"),
+        }
+    }
+
+    #[test]
+    fn upsert_app_is_idempotent_by_identity() {
+        let db = Db::open_in_memory().unwrap();
+        let id1 = db.upsert_app(&safari(), 1000).unwrap();
+        let id2 = db.upsert_app(&safari(), 2000).unwrap();
+        assert_eq!(id1, id2);
+
+        let count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM apps", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn upsert_app_does_not_overwrite_display_name() {
+        let db = Db::open_in_memory().unwrap();
+        let id = db.upsert_app(&safari(), 1000).unwrap();
+
+        let renamed = AppInfo {
+            display_name: "Mi Safari",
+            ..safari()
+        };
+        db.upsert_app(&renamed, 2000).unwrap();
+
+        let name: String = db
+            .conn
+            .query_row("SELECT display_name FROM apps WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(name, "Safari");
+    }
+
+    #[test]
+    fn upsert_app_refreshes_metadata() {
+        let db = Db::open_in_memory().unwrap();
+        let id = db.upsert_app(&safari(), 1000).unwrap();
+
+        let moved = AppInfo {
+            exe_path: Some("/Applications/Safari.app"),
+            ..safari()
+        };
+        db.upsert_app(&moved, 2000).unwrap();
+
+        let path: Option<String> = db
+            .conn
+            .query_row("SELECT exe_path FROM apps WHERE id = ?1", [id], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(path.as_deref(), Some("/Applications/Safari.app"));
     }
 }
