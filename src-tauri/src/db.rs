@@ -80,6 +80,15 @@ fn next_local_midnight(ts: i64) -> i64 {
         .timestamp()
 }
 
+/// Uso agregado de una app en un día (para el dashboard).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AppDayUsage {
+    pub app_id: i64,
+    pub display_name: String,
+    pub active_sec: i64,
+    pub idle_sec: i64,
+}
+
 /// Identidad observada de una app en un tick. `identity` es la clave
 /// canónica: bundle_id en macOS, exe_path en Windows.
 #[derive(Debug, Clone)]
@@ -274,6 +283,40 @@ impl Db {
         )?;
         self.close_segment(seg_id, end_ts)?;
         Ok(Some(seg_id))
+    }
+
+    /// Uso de un día por app: rollup cerrado + segmento abierto en curso,
+    /// para que "Hoy" cuadre con el tiempo real (±1 tick, §16.6).
+    pub fn day_summary(&self, day: &str) -> Result<Vec<AppDayUsage>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT t.app_id, a.display_name,
+                    SUM(t.active_sec) AS active_sec,
+                    SUM(t.idle_sec)   AS idle_sec
+             FROM (
+               SELECT u.app_id, u.active_sec, u.idle_sec
+               FROM usage_daily u WHERE u.day = ?1
+               UNION ALL
+               SELECT s.app_id,
+                      CASE s.state WHEN 'active' THEN s.duration_sec ELSE 0 END,
+                      CASE s.state WHEN 'idle'   THEN s.duration_sec ELSE 0 END
+               FROM segments s
+               WHERE s.day = ?1
+                 AND s.id = (SELECT CAST(value AS INTEGER) FROM config
+                             WHERE key = 'open_segment_id' AND value <> '')
+             ) t
+             JOIN apps a ON a.id = t.app_id
+             GROUP BY t.app_id
+             ORDER BY (SUM(t.active_sec) + SUM(t.idle_sec)) DESC",
+        )?;
+        let rows = stmt.query_map([day], |r| {
+            Ok(AppDayUsage {
+                app_id: r.get(0)?,
+                display_name: r.get(1)?,
+                active_sec: r.get(2)?,
+                idle_sec: r.get(3)?,
+            })
+        })?;
+        rows.collect()
     }
 
     /// Purga segmentos crudos más viejos que `raw_retention_days` (§13).
@@ -750,5 +793,42 @@ mod tests {
         // Rollups intactos: la historia agregada se conserva (§13).
         assert_eq!(rollup(&db, &local_day(old), app), (60, 0));
         assert_eq!(rollup(&db, &local_day(recent), app), (60, 0));
+    }
+
+    #[test]
+    fn day_summary_includes_open_segment_and_sorts_by_total() {
+        let db = Db::open_in_memory().unwrap();
+        let safari_id = db.upsert_app(&safari(), 1000).unwrap();
+        let code_id = db.upsert_app(&vscode(), 1000).unwrap();
+        let day = local_day(1000);
+
+        // Safari: 100 activo cerrado. Code: 30 idle cerrado + 50 activo ABIERTO.
+        let s1 = db
+            .open_segment(safari_id, None, SegState::Active, 1000)
+            .unwrap();
+        db.close_segment(s1, 1100).unwrap();
+        let s2 = db
+            .open_segment(code_id, None, SegState::Idle, 1100)
+            .unwrap();
+        db.close_segment(s2, 1130).unwrap();
+        let s3 = db
+            .open_segment(code_id, None, SegState::Active, 1130)
+            .unwrap();
+        db.flush_segment(s3, 1180).unwrap(); // abierto, con avance flusheado
+
+        let rows = db.day_summary(&day).unwrap();
+        assert_eq!(rows.len(), 2);
+
+        // Safari 100 > Code 80 (30 idle + 50 activo abierto).
+        assert_eq!(rows[0].display_name, "Safari");
+        assert_eq!((rows[0].active_sec, rows[0].idle_sec), (100, 0));
+        assert_eq!(rows[1].display_name, "Code.exe");
+        assert_eq!((rows[1].active_sec, rows[1].idle_sec), (50, 30));
+    }
+
+    #[test]
+    fn day_summary_empty_day_returns_no_rows() {
+        let db = Db::open_in_memory().unwrap();
+        assert!(db.day_summary("2026-01-01").unwrap().is_empty());
     }
 }
