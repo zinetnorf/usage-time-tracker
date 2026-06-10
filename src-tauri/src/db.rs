@@ -80,6 +80,17 @@ fn next_local_midnight(ts: i64) -> i64 {
         .timestamp()
 }
 
+/// Fila de la vista Apps (renombrar/fusionar).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AppRow {
+    pub id: i64,
+    pub identity: String,
+    pub display_name: String,
+    pub process_name: Option<String>,
+    pub exe_path: Option<String>,
+    pub bundle_id: Option<String>,
+}
+
 /// Totales de un día (línea de tendencia del Histórico).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DayTotals {
@@ -322,6 +333,24 @@ impl Db {
                 display_name: r.get(1)?,
                 active_sec: r.get(2)?,
                 idle_sec: r.get(3)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn list_apps(&self) -> Result<Vec<AppRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, identity, display_name, process_name, exe_path, bundle_id
+             FROM apps ORDER BY display_name COLLATE NOCASE",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(AppRow {
+                id: r.get(0)?,
+                identity: r.get(1)?,
+                display_name: r.get(2)?,
+                process_name: r.get(3)?,
+                exe_path: r.get(4)?,
+                bundle_id: r.get(5)?,
             })
         })?;
         rows.collect()
@@ -947,5 +976,18 @@ mod tests {
         assert_eq!((rows[0].active_sec, rows[0].idle_sec), (100, 0));
         assert_eq!(rows[1].display_name, "Code.exe");
         assert_eq!((rows[1].active_sec, rows[1].idle_sec), (0, 30));
+    }
+
+    #[test]
+    fn list_apps_returns_all_ordered_by_name() {
+        let db = Db::open_in_memory().unwrap();
+        db.upsert_app(&vscode(), 1000).unwrap();
+        db.upsert_app(&safari(), 1000).unwrap();
+
+        let apps = db.list_apps().unwrap();
+        assert_eq!(apps.len(), 2);
+        assert_eq!(apps[0].display_name, "Code.exe");
+        assert_eq!(apps[1].display_name, "Safari");
+        assert_eq!(apps[1].identity, "com.apple.Safari");
     }
 }
