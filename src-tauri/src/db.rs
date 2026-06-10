@@ -80,6 +80,14 @@ fn next_local_midnight(ts: i64) -> i64 {
         .timestamp()
 }
 
+/// Totales de un día (línea de tendencia del Histórico).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DayTotals {
+    pub day: String,
+    pub active_sec: i64,
+    pub idle_sec: i64,
+}
+
 /// Uso agregado de una app en un día (para el dashboard).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AppDayUsage {
@@ -309,6 +317,48 @@ impl Db {
              ORDER BY (SUM(t.active_sec) + SUM(t.idle_sec)) DESC",
         )?;
         let rows = stmt.query_map([day], |r| {
+            Ok(AppDayUsage {
+                app_id: r.get(0)?,
+                display_name: r.get(1)?,
+                active_sec: r.get(2)?,
+                idle_sec: r.get(3)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Totales por día en un rango inclusivo de días 'YYYY-MM-DD'.
+    /// Días sin datos no aparecen: la UI rellena huecos.
+    pub fn range_totals(&self, from_day: &str, to_day: &str) -> Result<Vec<DayTotals>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT day, SUM(active_sec), SUM(idle_sec)
+             FROM usage_daily
+             WHERE day BETWEEN ?1 AND ?2
+             GROUP BY day
+             ORDER BY day",
+        )?;
+        let rows = stmt.query_map([from_day, to_day], |r| {
+            Ok(DayTotals {
+                day: r.get(0)?,
+                active_sec: r.get(1)?,
+                idle_sec: r.get(2)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Desglose por app acumulado en un rango inclusivo de días.
+    pub fn range_summary(&self, from_day: &str, to_day: &str) -> Result<Vec<AppDayUsage>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT u.app_id, a.display_name,
+                    SUM(u.active_sec), SUM(u.idle_sec)
+             FROM usage_daily u
+             JOIN apps a ON a.id = u.app_id
+             WHERE u.day BETWEEN ?1 AND ?2
+             GROUP BY u.app_id
+             ORDER BY (SUM(u.active_sec) + SUM(u.idle_sec)) DESC",
+        )?;
+        let rows = stmt.query_map([from_day, to_day], |r| {
             Ok(AppDayUsage {
                 app_id: r.get(0)?,
                 display_name: r.get(1)?,
@@ -830,5 +880,72 @@ mod tests {
     fn day_summary_empty_day_returns_no_rows() {
         let db = Db::open_in_memory().unwrap();
         assert!(db.day_summary("2026-01-01").unwrap().is_empty());
+    }
+
+    #[test]
+    fn range_totals_returns_per_day_sums() {
+        let db = Db::open_in_memory().unwrap();
+        let safari_id = db.upsert_app(&safari(), 1000).unwrap();
+        let code_id = db.upsert_app(&vscode(), 1000).unwrap();
+
+        let d1 = local_ts(2026, 6, 1, 10, 0, 0);
+        let d2 = local_ts(2026, 6, 2, 10, 0, 0);
+
+        let s = db
+            .open_segment(safari_id, None, SegState::Active, d1)
+            .unwrap();
+        db.close_segment(s, d1 + 60).unwrap();
+        let s = db
+            .open_segment(code_id, None, SegState::Idle, d1 + 60)
+            .unwrap();
+        db.close_segment(s, d1 + 100).unwrap();
+        let s = db
+            .open_segment(safari_id, None, SegState::Active, d2)
+            .unwrap();
+        db.close_segment(s, d2 + 30).unwrap();
+
+        let rows = db.range_totals("2026-06-01", "2026-06-02").unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            (rows[0].day.as_str(), rows[0].active_sec, rows[0].idle_sec),
+            ("2026-06-01", 60, 40)
+        );
+        assert_eq!(
+            (rows[1].day.as_str(), rows[1].active_sec, rows[1].idle_sec),
+            ("2026-06-02", 30, 0)
+        );
+
+        // Fuera de rango: vacío.
+        assert!(db.range_totals("2026-05-01", "2026-05-31").unwrap().is_empty());
+    }
+
+    #[test]
+    fn range_summary_aggregates_per_app_across_days() {
+        let db = Db::open_in_memory().unwrap();
+        let safari_id = db.upsert_app(&safari(), 1000).unwrap();
+        let code_id = db.upsert_app(&vscode(), 1000).unwrap();
+
+        let d1 = local_ts(2026, 6, 1, 10, 0, 0);
+        let d2 = local_ts(2026, 6, 2, 10, 0, 0);
+
+        let s = db
+            .open_segment(safari_id, None, SegState::Active, d1)
+            .unwrap();
+        db.close_segment(s, d1 + 60).unwrap();
+        let s = db
+            .open_segment(safari_id, None, SegState::Active, d2)
+            .unwrap();
+        db.close_segment(s, d2 + 40).unwrap();
+        let s = db
+            .open_segment(code_id, None, SegState::Idle, d2 + 40)
+            .unwrap();
+        db.close_segment(s, d2 + 70).unwrap();
+
+        let rows = db.range_summary("2026-06-01", "2026-06-02").unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].display_name, "Safari");
+        assert_eq!((rows[0].active_sec, rows[0].idle_sec), (100, 0));
+        assert_eq!(rows[1].display_name, "Code.exe");
+        assert_eq!((rows[1].active_sec, rows[1].idle_sec), (0, 30));
     }
 }
