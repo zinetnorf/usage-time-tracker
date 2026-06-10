@@ -19,6 +19,7 @@ struct OpenSeg {
     segment_id: i64,
     identity: String,
     state: SegState,
+    last_flush_ts: i64,
 }
 
 pub struct Tracker {
@@ -48,8 +49,14 @@ impl Tracker {
             SegState::Active
         };
 
-        if let Some(current) = &self.current {
+        if let Some(current) = &mut self.current {
             if current.identity == window.app.identity && current.state == state {
+                // Flush periódico anti-crash (§5.2.5), sin cerrar.
+                let flush_interval = self.db.config_i64("flush_interval_sec")?;
+                if obs.now_ts - current.last_flush_ts >= flush_interval {
+                    self.db.flush_segment(current.segment_id, obs.now_ts)?;
+                    current.last_flush_ts = obs.now_ts;
+                }
                 return Ok(());
             }
             // Cambió la app o el estado → cerrar y abrir (§5.2.4).
@@ -63,6 +70,7 @@ impl Tracker {
             segment_id,
             identity: window.app.identity.to_string(),
             state,
+            last_flush_ts: obs.now_ts,
         });
         Ok(())
     }
@@ -187,5 +195,36 @@ mod tests {
         assert_eq!(segs[2].1, "active");
         assert_eq!(segs[0].3, 1070, "active cerrado al pasar a idle");
         assert_eq!(segs[1].3, 1080, "idle cerrado al volver input");
+    }
+
+    fn open_end_ts(t: &Tracker) -> i64 {
+        t.db()
+            .conn
+            .query_row("SELECT end_ts FROM segments ORDER BY id DESC LIMIT 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn periodic_flush_persists_progress_without_closing() {
+        let db = Db::open_in_memory().unwrap();
+        let mut t = Tracker::new(db).unwrap();
+
+        t.tick(&safari_obs(0, 1000)).unwrap();
+        t.tick(&safari_obs(0, 1010)).unwrap();
+        assert_eq!(open_end_ts(&t), 1000, "antes del intervalo no flushea");
+
+        t.tick(&safari_obs(0, 1031)).unwrap(); // >= 30 s desde apertura
+        assert_eq!(open_end_ts(&t), 1031, "flush persiste avance");
+        assert_eq!(segments(&t).len(), 1, "flush no cierra");
+
+        // Sin rollup: el segmento sigue abierto.
+        let rows: i64 = t
+            .db()
+            .conn
+            .query_row("SELECT COUNT(*) FROM usage_daily", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 0);
     }
 }
